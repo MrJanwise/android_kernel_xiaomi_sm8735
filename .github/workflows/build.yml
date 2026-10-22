@@ -1,117 +1,88 @@
-name: Build crDroid 17 OSS Kernel (Onyx + Droidspaces + ReSukiSU)
+name: Build Poco F7 (Onyx) OSS Kernel
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/build.yml'
-      - 'setup_droidspaces.sh'
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Освобождение места и установка пакетов
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex git libelf-dev libssl-dev lld lz4 pahole python3 zip zstd
-
-      - name: Клонирование репозитория ядра
+      - name: Checkout Kernel
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Скачивание AOSP Clang 18 (r522817)
+      - name: Setup Environment
         run: |
-          mkdir -p ${{ github.workspace }}/clang
-          curl -LSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r522817.tar.gz | tar -xz -C ${{ github.workspace }}/clang
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses-dev lib32readline-dev lib32z1-dev libncurses-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 clang lld llvm jq
 
-      - name: Запуск setup_droidspaces.sh (kABI патч + ReSukiSU)
+      - name: Setup Clang Toolchain
         run: |
-          chmod +x ./setup_droidspaces.sh
-          ./setup_droidspaces.sh
+          mkdir -p toolchains
+          git clone --depth=1 https://github.com/ZyCromerZ/Clang.git -b main toolchains/clang
 
-      - name: Генерация .config и проверка флагов
-        run: |
-          export PATH="${{ github.workspace }}/clang/bin:$PATH"
-
-          # Ищем базовый конфиг и вендорные фрагменты в дереве crDroid
-          BASE_DEFCONFIG="gki_defconfig"
-          FRAGMENTS=""
-          for f in sun_GKI.config cliffs_GKI.config sm8735_GKI.config onyx_GKI.config; do
-            if [ -f "arch/arm64/configs/vendor/$f" ]; then
-              FRAGMENTS="$FRAGMENTS arch/arm64/configs/vendor/$f"
-            elif [ -f "arch/arm64/configs/$f" ]; then
-              FRAGMENTS="$FRAGMENTS arch/arm64/configs/$f"
-            fi
-          done
-
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 $BASE_DEFCONFIG
-
-          if [ -n "$FRAGMENTS" ]; then
-            echo "[*] Найдены платформенные фрагменты:$FRAGMENTS"
-            ARCH=arm64 ./scripts/kconfig/merge_config.sh -m -O out out/.config $FRAGMENTS
-          fi
-
-          # Принудительно фиксируем флаги Droidspaces, ReSukiSU и сохранения kABI-символов
-          ./scripts/config --file out/.config \
-            -e NAMESPACES \
-            -e UTS_NS \
-            -e TIME_NS \
-            -e IPC_NS \
-            -e USER_NS \
-            -e PID_NS \
-            -e NET_NS \
-            -e SYSVIPC \
-            -e POSIX_MQUEUE \
-            -e DEVTMPFS \
-            -e CGROUPS \
-            -e MEMCG \
-            -e SECCOMP \
-            -e NETFILTER_XT_MATCH_ADDRTYPE \
-            -e KSU \
-            -e KPROBES \
-            -e HAVE_KPROBES \
-            -e KPROBE_EVENTS \
-            -d TRIM_UNUSED_KSYMS \
-            -d MODULE_SIG_FORCE
-
-          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-
-          echo "=== Итоговая проверка флагов в out/.config ==="
-          grep -E "CONFIG_(SYSVIPC|IPC_NS|PID_NS|USER_NS|POSIX_MQUEUE|DEVTMPFS|KSU|TRIM_UNUSED_KSYMS)=" out/.config || true
-
-      - name: Компиляция ядра (Image)
-        run: |
-          export PATH="${{ github.workspace }}/clang/bin:$PATH"
-          make -j$(nproc --all) O=out ARCH=arm64 \
-            CC="ccache clang" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            Image Image.gz
-
-      - name: Упаковка в AnyKernel3
+      - name: Setup AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          cp out/arch/arm64/boot/Image anykernel/
 
-          sed -i 's/device.name1=.*/device.name1=onyx/' anykernel/anykernel.sh
-          sed -i 's/device.name2=.*/device.name2=f7/' anykernel/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel/anykernel.sh
-          sed -i 's|BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|BLOCK=auto;|' anykernel/anykernel.sh
-          sed -i 's/IS_SLOT_DEVICE=0;/IS_SLOT_DEVICE=1;/' anykernel/anykernel.sh
+      - name: Make Build Script Executable
+        run: chmod +x setup_droidspaces.sh
 
+      - name: Build Kernel with Droidspaces & ReSukiSU
+        env:
+          ARCH: arm64
+          SUBARCH: arm64
+          CC: ccache clang
+          LLVM: 1
+          LLVM_IAS: 1
+        run: |
+          export PATH="$PWD/toolchains/clang/bin:$PATH"
+          export KCFLAGS="-O2 -mcpu=cortex-x4 -mtune=cortex-x4 -fomit-frame-pointer -fno-stack-protector -mbranch-protection=none"
+          
+          OUT_DIR="out"
+          mkdir -p $OUT_DIR
+          
+          # Генерируем базовый конфиг для Onyx (SM8735)
+          echo "[*] Генерируем конфиг..."
+          make O=$OUT_DIR gki_defconfig vendor/sun_perf.config vendor/onyx_perf.config
+          
+          # Применяем Droidspaces (Namespaces + kABI патч)
+          echo "[*] Применяем Droidspaces..."
+          ./setup_droidspaces.sh "$OUT_DIR"
+          
+          # Интегрируем ReSukiSU (KernelSU)
+          echo "[*] Интегрируем ReSukiSU..."
+          git clone --depth=1 https://github.com/ReSukiSU/ReSukiSU.git /tmp/ReSukiSU
+          ln -sf /tmp/ReSukiSU/kernel drivers/kernelsu
+          
+          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+            echo "source \"drivers/kernelsu/Kconfig\"" >> drivers/Kconfig
+          fi
+          if ! grep -q "kernelsu/" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+          
+          scripts/config --file $OUT_DIR/.config -e CONFIG_KSU
+          
+          # Финализируем конфиг
+          make O=$OUT_DIR olddefconfig
+          
+          # Сборка Image
+          echo "[*] Запускаем сборку на $(nproc) потоках..."
+          make O=$OUT_DIR -j$(nproc) Image.gz
+          
+          # Упаковка в AnyKernel3
+          cp $OUT_DIR/arch/arm64/boot/Image.gz anykernel/
           cd anykernel
-          zip -r9 ../crDroid17-Onyx-Droidspaces-ReSukiSU-$(date +%Y%m%d).zip * -x .git README.md *placeholder
+          
+          # Правим anykernel.sh под onyx
+          sed -i 's/device.name1=/device.name1=onyx/g' anykernel.sh
+          sed -i 's/block=\/dev\/block\/platform\/.*\/by-name\/boot/block=\/dev\/block\/bootdevice\/by-name\/boot/g' anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' anykernel.sh # A/B девайс
+          
+          zip -r9 "../MrJanwise-Onyx-OSS-Droidspaces.zip" * -x .git README.md .gitignore
 
-      - name: Выгрузка готового ядра в Artifacts
+      - name: Upload Kernel ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: crDroid17-Onyx-Kernel-Build
-          path: |
-            *.zip
-            out/arch/arm64/boot/Image
-            
+          name: MrJanwise-Onyx-OSS
+          path: MrJanwise-Onyx-OSS-Droidspaces.zip
