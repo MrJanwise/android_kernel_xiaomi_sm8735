@@ -1,39 +1,43 @@
-#!/bin/bash
-# setup_droidspaces.sh - Патч для поддержки LXC/Namespaces с сохранением kABI
-OUT_DIR=${1:-"out"}
+#!/usr/bin/env bash
+set -e
 
-echo "[*] Применяем Droidspaces kABI-патч..."
+echo "=== [1/3] Скачивание и запуск setup_droidspaces.sh из konoha-kernel-gki ==="
+curl -fLSs "https://raw.githubusercontent.com/onyx-oss/konoha-kernel-gki/gki/setup_droidspaces.sh" -o konoha_droidspaces.sh
+chmod +x konoha_droidspaces.sh
+./konoha_droidspaces.sh
+rm -f konoha_droidspaces.sh
 
-# Качаем проверенный kABI-патч для ядер ниже 6.12
-PATCH_NAME="001.GKI-below-6.12-fix_sysvipc_kabi_3_4_5.patch"
-PATCH_URL="https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/$PATCH_NAME"
+echo "=== [2/3] Интеграция ReSukiSU ==="
+curl -fLSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
 
-curl -sLO "$PATCH_URL"
+echo "=== [3/3] Добавление флагов в базовые конфиги ==="
+for CFG in arch/arm64/configs/gki_defconfig arch/arm64/configs/consolidate.fragment; do
+    if [ -f "$CFG" ]; then
+        cat << 'EOF' >> "$CFG"
 
-if patch -p1 <"$PATCH_NAME"; then
-    echo "[+] Патч успешно применен"
-    rm -f "$PATCH_NAME"
-else
-    echo "[-] Ошибка наложения патча!"
-    rm -f "$PATCH_NAME"
-    exit 1
-fi
+# Droidspaces v7.0.0 Required Flags (kABI-safe)
+CONFIG_NAMESPACES=y
+CONFIG_UTS_NS=y
+CONFIG_TIME_NS=y
+CONFIG_IPC_NS=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_DEVTMPFS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_SECCOMP=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
 
-# Включаем обязательные флаги в .config
-if [ -f"$OUT_DIR/.config" ]; then
-    echo "[*] Включаем namespaces..."
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_SYSVIPC
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_POSIX_MQUEUE
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_IPC_NS
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_PID_NS
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_USER_NS
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_DEVTMPFS
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_NAMESPACES
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_NETFILTER
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_NETFILTER_XT_MATCH_ADDRTYPE
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_TMPFS_POSIX_ACL
-    scripts/config --file "$OUT_DIR/.config" -e CONFIG_TMPFS_XATTR
-    echo "[+] Флаги Droidspaces добавлены"
-else
-    echo "[-] .config не найден в $OUT_DIR!"
-fi
+# ReSukiSU Support
+CONFIG_KSU=y
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+EOF
+    fi
+done
+
+echo "[+] Все патчи успешно применены!"
