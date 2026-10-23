@@ -1,0 +1,76 @@
+name: Build Onyx OSS Kernel + repack boot.img
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex git gnupg libssl-dev libxml2-utils python3 clang lld llvm
+
+      - name: Setup Clang
+        run: |
+          mkdir -p toolchains
+          git clone --depth=1 https://github.com/ZyCromerZ/Clang.git -b main toolchains/clang
+
+      - name: Download stock boot.img
+        run: |
+          curl -sL -o stock-boot.img https://github.com/MrJanwise/android_kernel_xiaomi_sm8735/releases/download/stock-boot/boot.img
+          ls -la stock-boot.img
+
+      - name: Get AOSP bootimg tools
+        run: |
+          curl -sL 'https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/unpack_bootimg.py?format=TEXT' | base64 -d > unpack_bootimg.py
+          curl -sL 'https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/mkbootimg.py?format=TEXT' | base64 -d > mkbootimg.py
+
+      - name: Build Kernel
+        env:
+          ARCH: arm64
+          SUBARCH: arm64
+          CC: ccache clang
+          LLVM: 1
+          LLVM_IAS: 1
+        run: |
+          export PATH="$PWD/toolchains/clang/bin:$PATH"
+          export KCFLAGS="-O2 -mcpu=cortex-x4 -mtune=cortex-x4 -fomit-frame-pointer -fno-stack-protector -mbranch-protection=none"
+          OUT_DIR="out"
+          mkdir -p $OUT_DIR
+          make O=$OUT_DIR gki_defconfig vendor/sun_perf.config vendor/onyx_perf.config
+          chmod +x setup_droidspaces.sh
+          ./setup_droidspaces.sh "$OUT_DIR"
+          make O=$OUT_DIR olddefconfig
+          make O=$OUT_DIR -j$(nproc) Image
+
+      - name: Repack boot.img
+        run: |
+          python3 unpack_bootimg.py --boot_img stock-boot.img --out out_boot > unpack.log
+          cat unpack.log
+          CMDLINE=$(sed -n "s/^cmdline: //p" unpack.log | head -n1 | sed "s/^['\"]//; s/['\"]$//")
+          OS_VER=$(sed -n "s/^os version: //p" unpack.log | head -n1)
+          OS_PL=$(sed -n "s/^os patch level: //p" unpack.log | head -n1)
+          RAMDISK_ARG=""
+          [ -s out_boot/ramdisk ] && RAMDISK_ARG="--ramdisk out_boot/ramdisk"
+          python3 mkbootimg.py \
+            --header_version 4 \
+            --pagesize 4096 \
+            --kernel out/arch/arm64/boot/Image \
+            $RAMDISK_ARG \
+            --dtb out_boot/dtb \
+            --cmdline "$CMDLINE" \
+            --os_version "$OS_VER" \
+            --os_patch_level "$OS_PL" \
+            -o new-boot.img
+          ls -la new-boot.img
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-boot-img
+          path: new-boot.img
