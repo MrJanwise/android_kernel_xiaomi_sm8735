@@ -75,9 +75,9 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
           
-          # Заменяем старый 32-битный busybox на чистый 64-битный aarch64
+          # Убираем старый бинарник и качаем гарантированно живой 64-битный busybox aarch64
           rm -f anykernel/tools/busybox*
-          curl -fLSs https://github.com/rust-embedded/cargo-binutils/releases/download/v0.2.0/busybox-aarch64 -o anykernel/tools/busybox
+          curl -fLSs https://github.com/urbanskynet/android-busybox-ndk/releases/download/1.33.1/busybox-aarch64 -o anykernel/tools/busybox
           chmod +x anykernel/tools/busybox
 
           cp out/arch/arm64/boot/Image.gz anykernel/
