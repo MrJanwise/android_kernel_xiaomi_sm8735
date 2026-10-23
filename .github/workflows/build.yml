@@ -1,4 +1,4 @@
-name: Build Clean crDroid 17 Kernel (Droidspaces Only)
+name: Build crDroid 17 Onyx (Droidspaces Final)
 
 on:
   workflow_dispatch:
@@ -21,13 +21,11 @@ jobs:
       - name: Скачивание оригинального компилятора Clang 22.0.2 (r596125)
         run: |
           mkdir -p ${{ github.workspace }}/clang
-          # Качаем именно тот Clang r596125, которым собрано твоё текущее ядро crDroid
           if ! curl -fLSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r596125.tar.gz | tar -xz -C ${{ github.workspace }}/clang; then
-            echo "Fallback на зеркало AOSP prebuilts..."
             curl -fLSs https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/mirror-goog-main-llvm-toolchain-source/clang-r596125.tar.gz | tar -xz -C ${{ github.workspace }}/clang
           fi
 
-      - name: Настройка родного конфига и включение флагов Droidspaces
+      - name: Настройка конфига и включение флагов Droidspaces
         run: |
           export PATH="${{ github.workspace }}/clang/bin:$PATH"
           mkdir -p out
@@ -35,9 +33,8 @@ jobs:
           # Берём 100% рабочий конфиг с твоего телефона
           cp current_crdroid.config out/.config
 
-          # 1. Жёстко фиксируем vermagic: "-4k-g10570812a487"
-          # 2. Отключаем проверку подписи модулей (на случай любых расхождений)
-          # 3. Включаем ТОЛЬКО флаги Droidspaces
+          # Фиксируем vermagic, отключаем принудительную подпись модулей 
+          # и включаем недостающие флаги для прохождения проверки Droidspaces v7.0.0
           ./scripts/config --file out/.config \
             --set-str LOCALVERSION "-4k-g10570812a487" \
             -d LOCALVERSION_AUTO \
@@ -46,24 +43,21 @@ jobs:
             -e SYSVIPC \
             -e POSIX_MQUEUE \
             -e IPC_NS \
-            -e USER_NS \
             -e PID_NS \
+            -e USER_NS \
             -e DEVTMPFS \
             -e NETFILTER_XT_MATCH_ADDRTYPE \
             -e TMPFS_POSIX_ACL \
-            -e TMPFS_XATTR \
-            -e CGROUP_DEVICE \
-            -e CGROUP_PIDS
+            -e TMPFS_XATTR
 
           make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
 
-          echo "=== ПРОВЕРКА ВЕРСИИ И ФЛАГОВ В ИТОГОВОМ КОНФИГЕ ==="
-          grep -E "CONFIG_(LOCALVERSION|SYSVIPC|POSIX_MQUEUE|IPC_NS|USER_NS|PID_NS|DEVTMPFS|NETFILTER_XT_MATCH_ADDRTYPE)=" out/.config
+          echo "=== ПРОВЕРКА ФЛАГОВ ДЛЯ DROIDSPACES ==="
+          grep -E "CONFIG_(SYSVIPC|IPC_NS|PID_NS|USER_NS|DEVTMPFS|NETFILTER_XT_MATCH_ADDRTYPE)=" out/.config
 
       - name: Компиляция ядра
         run: |
           export PATH="${{ github.workspace }}/clang/bin:$PATH"
-          # Создаём пустой .scmversion, чтобы система сборки НЕ добавляла новый git-хэш или -dirty
           touch .scmversion
 
           make -j$(nproc --all) O=out ARCH=arm64 \
@@ -75,28 +69,30 @@ jobs:
 
       - name: Проверка vermagic внутри собранного ядра
         run: |
-          echo "Ищем строку версии внутри скомпилированного Image:"
           strings out/arch/arm64/boot/Image | grep "6.6.142-4k-g10570812a487" | head -n 3
 
-      - name: Упаковка в AnyKernel3
+      - name: Исправление AnyKernel3 под 64-битную архитектуру и GKI v4
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          # Используем Image.gz — AnyKernel3 сам корректно перепакует его под формат твоего boot.img
+          
+          # Заменяем старый 32-битный busybox на чистый 64-битный aarch64
+          rm -f anykernel/tools/busybox*
+          curl -fLSs https://github.com/rust-embedded/cargo-binutils/releases/download/v0.2.0/busybox-aarch64 -o anykernel/tools/busybox
+          chmod +x anykernel/tools/busybox
+
           cp out/arch/arm64/boot/Image.gz anykernel/
 
           sed -i 's/device.name1=.*/device.name1=onyx/' anykernel/anykernel.sh
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel/anykernel.sh
-          sed -i 's|BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|BLOCK=/dev/block/bootdevice/by-name/boot;|' anykernel/anykernel.sh
+          sed -i 's|BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|BLOCK=auto;|' anykernel/anykernel.sh
           sed -i 's/IS_SLOT_DEVICE=0;/IS_SLOT_DEVICE=1;/' anykernel/anykernel.sh
 
           cd anykernel
-          zip -r9 ../crDroid17-Onyx-Droidspaces-Clean-$(date +%Y%m%d).zip * -x .git README.md *placeholder
+          zip -r9 ../crDroid17-Onyx-Droidspaces-Ready.zip * -x .git README.md *placeholder
 
-      - name: Выгрузка готового ядра
+      - name: Выгрузка готового архива
         uses: actions/upload-artifact@v4
         with:
-          name: crDroid17-Onyx-Clean-Droidspaces
-          path: |
-            *.zip
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
+          name: crDroid17-Onyx-Droidspaces-Ready
+          path: "*.zip"
+          
