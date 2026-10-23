@@ -71,17 +71,14 @@ jobs:
         run: |
           strings out/arch/arm64/boot/Image | grep "6.6.142-4k-g10570812a487" | head -n 3
 
-      - name: Исправление AnyKernel3 под 64-битную архитектуру и GKI v4
+      - name: Упаковка в AnyKernel3 без лишних скачиваний
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
           
-          # Убираем старый бинарник и качаем гарантированно живой 64-битный busybox aarch64
-          rm -f anykernel/tools/busybox*
-          curl -fLSs https://github.com/urbanskynet/android-busybox-ndk/releases/download/1.33.1/busybox-aarch64 -o anykernel/tools/busybox
-          chmod +x anykernel/tools/busybox
-
+          # Копируем скомпилированное ядро Image.gz
           cp out/arch/arm64/boot/Image.gz anykernel/
 
+          # Настраиваем anykernel.sh под POCO F7 (onyx)
           sed -i 's/device.name1=.*/device.name1=onyx/' anykernel/anykernel.sh
           sed -i 's/do.devicecheck=1/do.devicecheck=0/' anykernel/anykernel.sh
           sed -i 's|BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|BLOCK=auto;|' anykernel/anykernel.sh
